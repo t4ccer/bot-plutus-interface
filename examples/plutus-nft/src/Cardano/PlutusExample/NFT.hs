@@ -1,7 +1,9 @@
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE RecordWildCards #-}
 
 module Cardano.PlutusExample.NFT where
 
+import Prelude qualified as Hask
 import Cardano.Api.Shelley (PlutusScript (..), PlutusScriptV1)
 import Codec.Serialise (serialise)
 import Control.Monad hiding (fmap)
@@ -20,26 +22,32 @@ import Plutus.Contract (Contract, Endpoint, submitTxConstraintsWith, tell, utxos
 import Plutus.Contract qualified as Contract
 import Plutus.V1.Ledger.Scripts qualified as Scripts
 import PlutusTx qualified
-import PlutusTx.Prelude hiding (Semigroup (..), unless)
+import PlutusTx.Prelude hiding (Semigroup (..), unless, decodeUtf8)
 import Text.Printf (printf)
 import Prelude (Semigroup (..), String, show)
+import Data.Aeson (ToJSON, toJSON, object, (.=))
+import PlutusTx.Builtins.Internal (BuiltinByteString (BuiltinByteString))
+import Cardano.Prelude (fromRight, decodeUtf8')
+import Data.ByteString.Base16 (encode)
+import Plutus.Contracts.Currency (CurrencyError, mintContract)
 
 {-# INLINEABLE mkPolicy #-}
 mkPolicy :: TxOutRef -> TokenName -> BuiltinData -> ScriptContext -> Bool
-mkPolicy oref tn _ ctx =
-  traceIfFalse "UTxO not consumed" hasUTxO
-    && traceIfFalse "wrong amount minted" checkMintedAmount
-  where
-    info :: TxInfo
-    info = scriptContextTxInfo ctx
+mkPolicy _ _ _ _ = True
+-- mkPolicy oref tn _ ctx =
+--   traceIfFalse "UTxO not consumed" hasUTxO
+--     && traceIfFalse "wrong amount minted" checkMintedAmount
+--   where
+--     info :: TxInfo
+--     info = scriptContextTxInfo ctx
 
-    hasUTxO :: Bool
-    hasUTxO = any (\i -> txInInfoOutRef i == oref) $ txInfoInputs info
+--     hasUTxO :: Bool
+--     hasUTxO = any (\i -> txInInfoOutRef i == oref) $ txInfoInputs info
 
-    checkMintedAmount :: Bool
-    checkMintedAmount = case flattenValue (txInfoMint info) of
-      [(cs, tn', amt)] -> cs == ownCurrencySymbol ctx && tn' == tn && amt == 1
-      _ -> False
+--     checkMintedAmount :: Bool
+--     checkMintedAmount = case flattenValue (txInfoMint info) of
+--       [(cs, tn', amt)] -> cs == ownCurrencySymbol ctx && tn' == tn && amt == 1
+--       _ -> False
 
 policy :: TxOutRef -> TokenName -> Scripts.MintingPolicy
 policy oref tn =
@@ -63,18 +71,49 @@ curSymbol oref tn = scriptCurrencySymbol $ policy oref tn
 type NFTSchema =
   Endpoint "mint" TokenName
 
+data NftMetadata = NftMetadata
+  { policyId :: CurrencySymbol
+  , name :: BuiltinByteString
+  , image :: BuiltinByteString
+  }
+
+instance ToJSON NftMetadata where
+  toJSON NftMetadata{..} =
+    object
+    [ "721" .= object
+      [ toHex (unCurrencySymbol policyId) .= object
+        [ toHex name .= object
+          [ "name" .= toText name
+          , "image" .= toText image
+          ]
+        ]
+      ]
+    ]
+    where
+      decodeUtf8 x = fromRight (Hask.error $ Hask.show x) $ decodeUtf8' x
+      
+      toHex (BuiltinByteString str) = decodeUtf8 (encode str)
+
+      toText (BuiltinByteString str) = decodeUtf8 str
+
 mintNft :: TokenName -> Contract (Last Text) NFTSchema Text ()
 mintNft tn = do
   pkh <- Contract.ownPaymentPubKeyHash
-  utxos <- utxosAt (pubKeyHashAddress pkh Nothing)
-  tell $ Last $ Just "Contract started with "
-  case Map.keys utxos of
-    [] -> Contract.logError @String "no utxo found"
-    oref : _ -> do
-      tell $ Last $ Just $ "Using oref:" <> Text.pack (show oref)
-      let val = Value.singleton (curSymbol oref tn) tn 1
-          lookups = Constraints.mintingPolicy (policy oref tn) <> Constraints.unspentOutputs utxos
-          tx = Constraints.mustMintValue val <> Constraints.mustSpendPubKeyOutput oref
-      void $ submitTxConstraintsWith @Void lookups tx
-      Contract.logInfo @String $ printf "forged %s" (show val)
-      tell $ Last $ Just "Finished"
+  void $ Contract.mapError (Text.pack . Hask.show @CurrencyError) (mintContract pkh [(tn, 1)])
+  
+  -- utxos <- utxosAt (pubKeyHashAddress pkh Nothing)
+  -- tell $ Last $ Just "Contract started with "
+  -- case Map.keys utxos of
+  --   [] -> Contract.logError @String "no utxo found"
+  --   oref : _ -> do
+  --     tell $ Last $ Just $ "Using oref:" <> Text.pack (show oref)
+  --     let cs = curSymbol oref tn
+  --         val = Value.singleton cs tn 1
+  --         lookups = Constraints.mintingPolicy (policy oref tn) <> Constraints.unspentOutputs utxos
+  --         tx = Constraints.mustMintValue val
+  --              <> Constraints.mustSpendPubKeyOutput oref
+  --              -- <> Constraints.mustIncludeMetadata (NftMetadata cs (unTokenName tn) "")
+  --              -- "{\"721\": {}}"
+  --     void $ submitTxConstraintsWith @Void lookups tx
+  --     Contract.logInfo @String $ printf "forged %s" (show val)
+  --     tell $ Last $ Just "Finished"

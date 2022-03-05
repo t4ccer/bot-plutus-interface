@@ -17,6 +17,7 @@ module BotPlutusInterface.Effects (
   logToContract,
   readFileTextEnvelope,
   writeFileJSON,
+  writeFileRaw,
   writeFileTextEnvelope,
   callCommand,
 ) where
@@ -28,10 +29,11 @@ import BotPlutusInterface.Types (
   ContractState (ContractState),
   LogLevel (..),
  )
-import Cardano.Api (AsType, FileError, HasTextEnvelope, TextEnvelopeDescr, TextEnvelopeError)
+import Cardano.Api (AsType, FileError (FileIOError), HasTextEnvelope, TextEnvelopeDescr, TextEnvelopeError)
 import Cardano.Api qualified
 import Control.Concurrent qualified as Concurrent
 import Control.Concurrent.STM (atomically, modifyTVar)
+import Control.Monad.Trans.Except.Extra (handleIOExceptT, runExceptT)
 import Control.Monad (void, when)
 import Control.Monad.Freer (Eff, LastMember, Member, interpretM, send, type (~>))
 import Data.Aeson (ToJSON)
@@ -48,6 +50,8 @@ import System.Directory qualified as Directory
 import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 import System.Process (readProcess, readProcessWithExitCode)
 import Prelude hiding (readFile)
+import PlutusTx.Builtins.Internal (BuiltinByteString (BuiltinByteString))
+import qualified Data.ByteString as ByteString
 
 data ShellArgs a = ShellArgs
   { cmdName :: Text
@@ -73,6 +77,7 @@ data PABEffect (w :: Type) (r :: Type) where
     FilePath ->
     PABEffect w (Either (FileError TextEnvelopeError) a)
   WriteFileJSON :: FilePath -> JSON.Value -> PABEffect w (Either (FileError ()) ())
+  WriteFileRaw :: FilePath -> BuiltinByteString -> PABEffect w (Either (FileError ()) ())
   WriteFileTextEnvelope ::
     HasTextEnvelope a =>
     FilePath ->
@@ -114,6 +119,9 @@ handlePABEffect contractEnv =
         ThreadDelay microSeconds -> Concurrent.threadDelay microSeconds
         ReadFileTextEnvelope asType filepath -> Cardano.Api.readFileTextEnvelope asType filepath
         WriteFileJSON filepath value -> Cardano.Api.writeFileJSON filepath value
+        WriteFileRaw filepath (BuiltinByteString value) -> runExceptT $
+          handleIOExceptT (FileIOError filepath) $
+          ByteString.writeFile filepath value
         WriteFileTextEnvelope filepath envelopeDescr contents ->
           Cardano.Api.writeFileTextEnvelope filepath envelopeDescr contents
         ListDirectory filepath -> Directory.listDirectory filepath
@@ -224,6 +232,14 @@ writeFileJSON ::
   JSON.Value ->
   Eff effs (Either (FileError ()) ())
 writeFileJSON path val = send @(PABEffect w) $ WriteFileJSON path val
+
+writeFileRaw ::
+  forall (w :: Type) (effs :: [Type -> Type]).
+  Member (PABEffect w) effs =>
+  FilePath ->
+  BuiltinByteString ->
+  Eff effs (Either (FileError ()) ())
+writeFileRaw path val = send @(PABEffect w) $ WriteFileRaw path val
 
 writeFileTextEnvelope ::
   forall (w :: Type) (a :: Type) (effs :: [Type -> Type]).

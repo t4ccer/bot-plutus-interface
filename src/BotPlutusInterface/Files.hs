@@ -10,6 +10,7 @@ module BotPlutusInterface.Files (
   txFilePath,
   txFileName,
   txIdToText,
+  metadataFilePath,
   writeAll,
   writePolicyScriptFile,
   redeemerJsonFilePath,
@@ -86,6 +87,7 @@ import Plutus.V1.Ledger.Api (
 import PlutusTx (ToData, toData)
 import PlutusTx.Builtins (fromBuiltin)
 import System.FilePath (takeExtension, (</>))
+import Data.ByteString.Hash (blake2b)
 import Prelude
 
 -- | Filename of a minting policy script
@@ -123,6 +125,11 @@ txFileName txId ext = "tx-" <> txIdToText txId <> "." <> ext
 
 txIdToText :: TxId.TxId -> Text
 txIdToText = encodeByteString . fromBuiltin . TxId.getTxId
+
+metadataFilePath :: forall (meta :: Type). JSON.ToJSON meta => PABConfig -> meta -> Text
+metadataFilePath pabConf meta =
+  let h = encodeByteString $ blake2b $ LazyByteString.toStrict $ JSON.encode meta
+   in pabConf.pcMetadataDir <> "/metadata-" <> h <> ".json"
 
 -- | Compiles and writes a script file under the given folder
 writePolicyScriptFile ::

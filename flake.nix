@@ -3,7 +3,6 @@
 
   inputs = {
     haskell-nix.url = "github:L-as/haskell.nix";
-
     nixpkgs.follows = "haskell-nix/nixpkgs-unstable";
 
     iohk-nix.url = "github:input-output-hk/iohk-nix";
@@ -83,12 +82,12 @@
     };
     plutus = {
       url =
-        "github:input-output-hk/plutus/cc72a56eafb02333c96f662581b57504f8f8992f";
+        "github:t4ccer/plutus/1a3c3a761cf048371c52a34b004f8b3fcf0dab43";
       flake = false;
     };
     plutus-apps = {
       url =
-        "github:input-output-hk/plutus-apps/7f543e21d4945a2024e46c572303b9c1684a5832";
+        "github:t4ccer/plutus-apps/74b868426847bcccebcddf906abccb0ca9fcd70d";
       flake = false;
     };
     purescript-bridge = {
@@ -324,6 +323,7 @@
           shell = {
             additional = ps: [
               ps.plutus-pab
+              ps.plutus-use-cases
             ];
             withHoogle = true;
             tools.haskell-language-server = {};

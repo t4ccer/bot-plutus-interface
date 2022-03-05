@@ -14,7 +14,7 @@ module BotPlutusInterface.CardanoCLI (
   queryTip,
 ) where
 
-import BotPlutusInterface.Effects (PABEffect, ShellArgs (..), callCommand)
+import BotPlutusInterface.Effects (PABEffect, ShellArgs (..), callCommand, writeFileRaw)
 import BotPlutusInterface.Files (
   DummyPrivKey (FromSKey, FromVKey),
   datumJsonFilePath,
@@ -23,12 +23,13 @@ import BotPlutusInterface.Files (
   signingKeyFilePath,
   txFilePath,
   validatorScriptFilePath,
+  metadataFilePath,
  )
 import BotPlutusInterface.Types (PABConfig, Tip)
 import BotPlutusInterface.UtxoParser qualified as UtxoParser
 import Cardano.Api.Shelley (NetworkId (Mainnet, Testnet), NetworkMagic (..), serialiseAddress)
 import Codec.Serialise qualified as Codec
-import Control.Monad (join)
+import Control.Monad (join, void)
 import Control.Monad.Freer (Eff, Member)
 import Data.Aeson qualified as JSON
 import Data.Aeson.Extras (encodeByteString)
@@ -89,8 +90,9 @@ import Plutus.V1.Ledger.Api (
   TokenName (..),
  )
 import Plutus.V1.Ledger.Api qualified as Plutus
-import PlutusTx.Builtins (fromBuiltin)
+import PlutusTx.Builtins (fromBuiltin, BuiltinByteString)
 import Prelude
+import Debug.Trace (trace)
 
 -- | Getting information of the latest block
 queryTip ::
@@ -184,8 +186,11 @@ buildTx ::
   Map PubKeyHash DummyPrivKey ->
   Tx ->
   Eff effs (Either Text ())
-buildTx pabConf privKeys tx =
-  callCommand @w $ ShellArgs "cardano-cli" opts (const ())
+
+buildTx pabConf privKeys tx = do
+  metadataOpts <- mkMetadataOpts @w pabConf (txMetadata tx)
+  let opts' = opts metadataOpts
+  trace (show opts') $ callCommand @w $ ShellArgs "cardano-cli" opts' (const ())
   where
     requiredSigners =
       concatMap
@@ -200,7 +205,7 @@ buildTx pabConf privKeys tx =
                     []
         )
         (Map.keys (Ledger.txSignatures tx))
-    opts =
+    opts metadata =
       mconcat
         [ ["transaction", "build-raw", "--alonzo-era"]
         , txInOpts pabConf (txInputs tx)
@@ -208,8 +213,9 @@ buildTx pabConf privKeys tx =
         , txOutOpts pabConf (txData tx) (txOutputs tx)
         , mintOpts pabConf (txMintScripts tx) (txRedeemers tx) (txMint tx)
         , validRangeOpts (txValidRange tx)
+        , metadata
         , requiredSigners
-        , ["--fee", showText . getLovelace . fromValue $ txFee tx]
+        , ["--fee", "343017"] -- showText . getLovelace . fromValue $ txFee tx]
         , mconcat
             [ ["--protocol-params-file", pabConf.pcProtocolParamsFile]
             , ["--out-file", txFilePath pabConf "raw" tx]
@@ -407,8 +413,8 @@ calculateExBudget script builtinData = do
       Plutus.evaluateScriptCounting Plutus.Verbose modelParams serialisedScript pData
 
 exBudgetToCliArg :: ExBudget -> Text
-exBudgetToCliArg (ExBudget (ExCPU steps) (ExMemory memory)) =
-  "(" <> showText steps <> "," <> showText memory <> ")"
+exBudgetToCliArg (ExBudget (ExCPU steps) (ExMemory memory)) = "(30000000, 500000)"
+  -- "(" <> showText steps <> "," <> showText memory <> ")"
 
 showText :: forall (a :: Type). Show a => a -> Text
 showText = Text.pack . show
@@ -417,3 +423,15 @@ showText = Text.pack . show
 -- toWalletKey :: Wallet -> Text
 -- toWalletKey =
 --   decodeUtf8 . convertToBase Base16 . hash @ByteString @Blake2b_160 . unXPub . walletXPub
+
+mkMetadataOpts ::
+  forall (w :: Type) (effs :: [Type -> Type]).
+  (Member (PABEffect w) effs) =>
+  PABConfig ->
+  Maybe BuiltinByteString ->
+  Eff effs [Text]
+mkMetadataOpts _ Nothing = pure mempty
+mkMetadataOpts pabConf (Just meta) = do
+  let fp =  metadataFilePath pabConf meta
+  void $ writeFileRaw @w @effs (Text.unpack fp) meta
+  pure [ "--metadata-json-file", fp]
